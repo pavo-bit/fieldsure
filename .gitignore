@@ -1,0 +1,99 @@
+# FieldSure .gitignore
+
+# ========================
+# Environment
+# ========================
+.env
+.env.local
+.env.*.local
+*.pem
+*.key
+
+# ========================
+# Flutter / Dart
+# ========================
+apps/mobile/.dart_tool/
+apps/mobile/.packages
+apps/mobile/.pub/
+apps/mobile/build/
+apps/mobile/.flutter-plugins
+apps/mobile/.flutter-plugins-dependencies
+apps/mobile/*.iml
+apps/mobile/.metadata
+apps/mobile/ios/Pods/
+apps/mobile/ios/.symlinks/
+apps/mobile/android/.gradle/
+apps/mobile/android/local.properties
+apps/mobile/android/app/debug/
+apps/mobile/android/app/profile/
+apps/mobile/android/app/release/
+**/*.g.dart
+**/*.freezed.dart
+
+# ========================
+# Node.js / NestJS
+# ========================
+node_modules/
+dist/
+apps/api/dist/
+apps/api/node_modules/
+packages/*/node_modules/
+*.tsbuildinfo
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# ========================
+# Python
+# ========================
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.venv/
+venv/
+env/
+*.egg-info/
+.eggs/
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+htmlcov/
+.coverage
+
+# ========================
+# Docker
+# ========================
+docker-compose.override.yml
+
+# ========================
+# IDE
+# ========================
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ========================
+# OS
+# ========================
+*.log
+*.tmp
+*.temp
+
+# ========================
+# Storage (local dev)
+# ========================
+data/
+minio-data/
+postgres-data/
+redis-data/
+
+# ========================
+# Prisma
+# ========================
+apps/api/prisma/migrations/**/migration_lock.toml

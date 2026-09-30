@@ -1,0 +1,881 @@
+// FieldSure — Prisma Schema
+// Phase 1: Users, Auth Sessions, Audit Logs foundation
+// Phase 2: Field Test Domain
+// Phase 3: Production hardening (token families, account lockout, mustChangePassword)
+
+generator client {
+  provider = "prisma-client-js"
+  output   = "../node_modules/.prisma/client"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ============================================================
+// Enums
+// ============================================================
+
+enum TestStatus {
+  DRAFT
+  CAPTURED
+  UPLOADING
+  PROCESSING
+  COMPLETED
+  INCONCLUSIVE
+  FAILED
+  REVIEWED_CONFIRMED
+  REVIEWED_OVERRIDDEN
+  PENDING_SYNC
+}
+
+enum UserRole {
+  ADMIN
+  SUPERVISOR
+  OPERATOR
+  LAB_ANALYST
+  AUDITOR
+}
+
+enum KitValidationStatus {
+  UNVALIDATED
+  PILOT
+  VALIDATED
+}
+
+enum CaseStatus {
+  OPEN
+  CLOSED
+  ARCHIVED
+}
+
+enum CustodyAction {
+  COLLECTED
+  TRANSFERRED
+  TESTED
+  SEALED
+  SUBMITTED_TO_LAB
+  RECEIVED_BY_LAB
+  REJECTED_BY_LAB
+  RETURNED
+}
+
+enum LabMethod {
+  GCMS
+  FTIR
+  LCMS
+  NMR
+  OTHER
+}
+
+enum ConfirmationOutcome {
+  TRUE_POSITIVE
+  FALSE_POSITIVE
+  TRUE_NEGATIVE
+  FALSE_NEGATIVE
+  NOT_APPLICABLE
+}
+
+enum AuditEventType {
+  LOGIN
+  LOGIN_FAILED
+  LOGOUT
+  TOKEN_REFRESH
+  TOKEN_FAMILY_COMPROMISED
+  PASSWORD_CHANGED
+  PASSWORD_RESET_FORCED
+  ACCOUNT_LOCKED
+  ACCOUNT_UNLOCKED
+  USER_CREATED
+  USER_UPDATED
+  USER_DEACTIVATED
+  // Phase 2+ events
+  TEST_CREATED
+  IMAGE_CAPTURED
+  IMAGE_UPLOADED
+  IMAGE_HASHED
+  PROCESSING_STARTED
+  PROCESSING_COMPLETED
+  CLASSIFICATION_CREATED
+  EVIDENCE_SIGNED
+  RECORD_VIEWED
+  RECORD_VERIFIED
+  RECORD_EXPORTED
+  SYNC_STARTED
+  SYNC_COMPLETED
+  ERROR
+  // Phase 3 events
+  KIT_CREATED
+  KIT_UPDATED
+  KIT_DEACTIVATED
+  KIT_VERSION_CREATED
+  CASE_CREATED
+  CASE_UPDATED
+  SAMPLE_CREATED
+  SAMPLE_UPDATED
+  CUSTODY_EVENT_RECORDED
+  TEST_REVIEWED
+  LAB_CONFIRMATION_RECORDED
+  REAGENT_EXPIRED_OVERRIDE
+  READING_WINDOW_VIOLATION
+  ORG_CREATED
+  ORG_UPDATED
+  UNIT_CREATED
+  UNIT_UPDATED
+}
+
+// ============================================================
+// Organization & Organizational Unit (Phase 3)
+// ============================================================
+
+model Organization {
+  id        String   @id @default(uuid()) @db.Uuid
+  code      String   @unique @db.VarChar(50)
+  name      String   @db.VarChar(255)
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz()
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz()
+
+  units OrgUnit[]
+  users User[]
+  cases Case[]
+
+  @@map("organizations")
+}
+
+model OrgUnit {
+  id             String   @id @default(uuid()) @db.Uuid
+  organizationId String   @map("organization_id") @db.Uuid
+  parentUnitId   String?  @map("parent_unit_id") @db.Uuid
+  code           String   @db.VarChar(50) /// Used in test numbers: {unitCode}-{yyyymmdd}-{seq}
+  name           String   @db.VarChar(255)
+  active         Boolean  @default(true)
+  createdAt      DateTime @default(now()) @map("created_at") @db.Timestamptz()
+  updatedAt      DateTime @updatedAt @map("updated_at") @db.Timestamptz()
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  parentUnit   OrgUnit?     @relation("UnitHierarchy", fields: [parentUnitId], references: [id])
+  childUnits   OrgUnit[]    @relation("UnitHierarchy")
+  users        User[]
+  tests        Test[]
+
+  @@unique([organizationId, code])
+  @@index([organizationId])
+  @@index([parentUnitId])
+  @@map("org_units")
+}
+
+// ============================================================
+// User (Extended Phase 3)
+// ============================================================
+
+model User {
+  id                  String    @id @default(uuid()) @db.Uuid
+  operatorId          String    @unique @map("operator_id") @db.VarChar(100) /// Badge/employee number
+  name                String    @db.VarChar(255)
+  email               String    @unique @db.VarChar(255)
+  passwordHash        String    @map("password_hash") @db.VarChar(255)
+  role                UserRole  @default(OPERATOR)
+  organizationId      String?   @map("organization_id") @db.Uuid
+  orgUnitId           String?   @map("org_unit_id") @db.Uuid
+  isActive            Boolean   @default(true) @map("is_active")
+  mustChangePassword  Boolean   @default(false) @map("must_change_password")
+  failedLoginAttempts Int       @default(0) @map("failed_login_attempts")
+  lockedUntil         DateTime? @map("locked_until") @db.Timestamptz()
+  lastLoginAt         DateTime? @map("last_login_at") @db.Timestamptz()
+  createdAt           DateTime  @default(now()) @map("created_at") @db.Timestamptz()
+  updatedAt           DateTime  @updatedAt @map("updated_at") @db.Timestamptz()
+
+  // Relations
+  organization            Organization?            @relation(fields: [organizationId], references: [id], onDelete: SetNull)
+  orgUnit                 OrgUnit?                 @relation(fields: [orgUnitId], references: [id], onDelete: SetNull)
+  authSessions            AuthSession[]
+  auditLogs               AuditLog[]
+  tests                   Test[]
+  reviews                 TestReview[]
+  labConfirmations        LabConfirmation[]
+  custodyEventsFrom       CustodyEvent[]           @relation("CustodyFrom")
+  custodyEventsTo         CustodyEvent[]           @relation("CustodyTo")
+  operatorInterpretations OperatorInterpretation[] @relation("OperatorInterpretations")
+  datasetReviews          DatasetSample[]
+  pilotEnrollments        PilotEnrollment[]
+  datasetSampleCustody    DatasetSampleCustody[]
+
+  @@index([organizationId])
+  @@index([orgUnitId])
+  @@map("users")
+}
+
+// ============================================================
+// Auth Session (Refresh Tokens)
+// ============================================================
+
+model AuthSession {
+  id               String    @id @default(uuid()) @db.Uuid
+  userId           String    @map("user_id") @db.Uuid
+  /// Family UUID — all sessions rotated from the same initial login share a family.
+  /// A replayed rotated token triggers revocation of the whole family.
+  tokenFamily      String    @map("token_family") @db.Uuid
+  refreshTokenHash String    @map("refresh_token_hash") @db.VarChar(255) /// bcrypt hash of refresh token
+  /// Sequence number within the family — monotonically increasing on each rotation
+  familySequence   Int       @default(1) @map("family_sequence")
+  deviceInfo       String?   @map("device_info") @db.VarChar(500)
+  ipAddress        String?   @map("ip_address") @db.VarChar(45)
+  userAgent        String?   @map("user_agent") @db.VarChar(500)
+  createdAt        DateTime  @default(now()) @map("created_at") @db.Timestamptz()
+  expiresAt        DateTime  @map("expires_at") @db.Timestamptz()
+  revokedAt        DateTime? @map("revoked_at") @db.Timestamptz()
+  /// Set on rotation to mark this session as superseded (not malicious)
+  rotatedAt        DateTime? @map("rotated_at") @db.Timestamptz()
+  lastUsedAt       DateTime? @map("last_used_at") @db.Timestamptz()
+
+  // Relations
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([tokenFamily])
+  @@index([expiresAt])
+  @@map("auth_sessions")
+}
+
+// ============================================================
+// Audit Log
+// ============================================================
+
+model AuditLog {
+  id           String         @id @default(uuid()) @db.Uuid
+  eventType    AuditEventType @map("event_type")
+  userId       String?        @map("user_id") @db.Uuid /// null for system or failed-login events
+  resourceType String?        @map("resource_type") @db.VarChar(100)
+  resourceId   String?        @map("resource_id") @db.Uuid
+  details      Json?          @db.JsonB
+  ipAddress    String?        @map("ip_address") @db.VarChar(45)
+  userAgent    String?        @map("user_agent") @db.VarChar(500)
+  requestId    String?        @map("request_id") @db.VarChar(36)
+  createdAt    DateTime       @default(now()) @map("created_at") @db.Timestamptz()
+
+  // Relations
+  user User? @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([eventType])
+  @@index([userId])
+  @@index([resourceType, resourceId])
+  @@index([createdAt(sort: Desc)])
+  @@map("audit_logs")
+}
+
+// ============================================================
+// Case & Sample (Phase 3)
+// ============================================================
+
+model Case {
+  id             String     @id @default(uuid()) @db.Uuid
+  organizationId String     @map("organization_id") @db.Uuid
+  caseNumber     String     @map("case_number") @db.VarChar(100)
+  title          String     @db.VarChar(500)
+  status         CaseStatus @default(OPEN)
+  createdAt      DateTime   @default(now()) @map("created_at") @db.Timestamptz()
+  updatedAt      DateTime   @updatedAt @map("updated_at") @db.Timestamptz()
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  samples      Sample[]
+  tests        Test[]
+
+  @@unique([organizationId, caseNumber])
+  @@index([organizationId])
+  @@map("cases")
+}
+
+model Sample {
+  id           String   @id @default(uuid()) @db.Uuid
+  caseId       String   @map("case_id") @db.Uuid
+  sampleNumber String   @map("sample_number") @db.VarChar(100)
+  description  String?  @db.Text
+  sealNumber   String?  @map("seal_number") @db.VarChar(100)
+  collectedAt  DateTime @map("collected_at") @db.Timestamptz()
+  createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz()
+  updatedAt    DateTime @updatedAt @map("updated_at") @db.Timestamptz()
+
+  case          Case           @relation(fields: [caseId], references: [id], onDelete: Cascade)
+  tests         Test[]
+  custodyEvents CustodyEvent[]
+
+  @@unique([caseId, sampleNumber])
+  @@index([caseId])
+  @@map("samples")
+}
+
+model CustodyEvent {
+  id         String        @id @default(uuid()) @db.Uuid
+  sampleId   String        @map("sample_id") @db.Uuid
+  fromUserId String?       @map("from_user_id") @db.Uuid
+  toUserId   String?       @map("to_user_id") @db.Uuid
+  action     CustodyAction
+  note       String?       @db.Text
+  location   String?       @db.VarChar(255)
+  timestamp  DateTime      @default(now()) @db.Timestamptz()
+
+  sample   Sample @relation(fields: [sampleId], references: [id], onDelete: Cascade)
+  fromUser User?  @relation("CustodyFrom", fields: [fromUserId], references: [id], onDelete: SetNull)
+  toUser   User?  @relation("CustodyTo", fields: [toUserId], references: [id], onDelete: SetNull)
+
+  @@index([sampleId])
+  @@index([timestamp(sort: Desc)])
+  @@map("custody_events")
+}
+
+// ============================================================
+// Test Kit (Extended Phase 3)
+// ============================================================
+
+model TestKit {
+  id                   String              @id @default(uuid()) @db.Uuid
+  code                 String              @unique @db.VarChar(50)
+  name                 String              @db.VarChar(255)
+  manufacturer         String              @db.VarChar(255)
+  description          String?             @db.Text
+  /// Known cross-reactivities (JSON array of strings, editable by domain experts)
+  crossReactivityNotes Json?               @map("cross_reactivity_notes") @db.JsonB
+  validationStatus     KitValidationStatus @default(UNVALIDATED) @map("validation_status")
+  active               Boolean             @default(true)
+  configurationVersion String              @map("configuration_version") @db.VarChar(50)
+  createdAt            DateTime            @default(now()) @map("created_at") @db.Timestamptz()
+  updatedAt            DateTime            @updatedAt @map("updated_at") @db.Timestamptz()
+
+  // Relations
+  versions KitVersion[]
+  tests    Test[]
+
+  @@map("test_kits")
+}
+
+model KitVersion {
+  id              String   @id @default(uuid()) @db.Uuid
+  kitId           String   @map("kit_id") @db.Uuid
+  version         String   @db.VarChar(50)
+  /// Reference color profiles: {substanceClass: {L, a, b}, ...} (editable config)
+  referenceColors Json     @map("reference_colors") @db.JsonB
+  /// Reading window in seconds: {minSeconds, maxSeconds}
+  readingWindow   Json     @map("reading_window") @db.JsonB
+  /// Whether control/blank test is required
+  controlRequired Boolean  @default(false) @map("control_required")
+  notes           String?  @db.Text
+  active          Boolean  @default(true)
+  createdAt       DateTime @default(now()) @map("created_at") @db.Timestamptz()
+
+  kit   TestKit @relation(fields: [kitId], references: [id], onDelete: Cascade)
+  tests Test[]
+
+  @@unique([kitId, version])
+  @@index([kitId])
+  @@map("kit_versions")
+}
+
+// ============================================================
+// Field Test (Extended Phase 3)
+// ============================================================
+
+model Test {
+  id              String     @id @default(uuid()) @db.Uuid
+  testNumber      String     @unique @map("test_number") @db.VarChar(50)
+  /// Client's provisional local reference (replaced by server testNumber)
+  clientReference String?    @map("client_reference") @db.VarChar(100)
+  caseId          String?    @map("case_id") @db.Uuid
+  sampleId        String?    @map("sample_id") @db.Uuid
+  operatorId      String     @map("operator_id") @db.Uuid
+  orgUnitId       String?    @map("org_unit_id") @db.Uuid
+  deviceId        String?    @map("device_id") @db.VarChar(255)
+  kitId           String     @map("kit_id") @db.Uuid
+  kitVersionId    String?    @map("kit_version_id") @db.Uuid
+  /// Control or blank test reference (optional)
+  controlTestId   String?    @map("control_test_id") @db.Uuid
+  status          TestStatus @default(DRAFT)
+
+  /// Reagent metadata (Phase 3)
+  reagentLot             String?   @map("reagent_lot") @db.VarChar(100)
+  reagentExpiry          DateTime? @map("reagent_expiry") @db.Timestamptz()
+  reagentAddedAt         DateTime? @map("reagent_added_at") @db.Timestamptz()
+  ambientTemperature     Float?    @map("ambient_temperature")
+  /// Override reason for expired reagent (ADMIN only, audited)
+  expiredReagentOverride String?   @map("expired_reagent_override") @db.Text
+
+  // Classification placeholders (kept for backward compatibility)
+  result     String? @db.VarChar(100)
+  confidence Float?
+
+  algorithmVersion     String? @map("algorithm_version") @db.VarChar(50)
+  configurationVersion String? @map("configuration_version") @db.VarChar(50)
+
+  clientCreatedAt DateTime  @map("client_created_at") @db.Timestamptz()
+  serverCreatedAt DateTime  @default(now()) @map("server_created_at") @db.Timestamptz()
+  startedAt       DateTime? @map("started_at") @db.Timestamptz()
+  completedAt     DateTime? @map("completed_at") @db.Timestamptz()
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz()
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz()
+
+  // Relations
+  operator                User                     @relation(fields: [operatorId], references: [id], onDelete: Restrict)
+  orgUnit                 OrgUnit?                 @relation(fields: [orgUnitId], references: [id], onDelete: SetNull)
+  case                    Case?                    @relation(fields: [caseId], references: [id], onDelete: SetNull)
+  sample                  Sample?                  @relation(fields: [sampleId], references: [id], onDelete: SetNull)
+  kit                     TestKit                  @relation(fields: [kitId], references: [id], onDelete: Restrict)
+  kitVersion              KitVersion?              @relation(fields: [kitVersionId], references: [id], onDelete: SetNull)
+  controlTest             Test?                    @relation("ControlTest", fields: [controlTestId], references: [id])
+  controlledTests         Test[]                   @relation("ControlTest")
+  processingRuns          ProcessingRun[]
+  classification          Classification?
+  evidenceRecord          EvidenceRecord?
+  imageAsset              ImageAsset?
+  reviews                 TestReview[]
+  labConfirmation         LabConfirmation?
+  operatorInterpretations OperatorInterpretation[]
+  datasetSample           DatasetSample?
+
+  @@index([operatorId])
+  @@index([orgUnitId])
+  @@index([caseId])
+  @@index([sampleId])
+  @@index([kitId])
+  @@index([kitVersionId])
+  @@index([status])
+  @@map("tests")
+}
+
+// ============================================================
+// Processing Run
+// ============================================================
+
+model ProcessingRun {
+  id                   String    @id @default(uuid()) @db.Uuid
+  testId               String    @map("test_id") @db.Uuid
+  imageId              String?   @map("image_id") @db.VarChar(255)
+  status               String    @db.VarChar(50)
+  algorithmVersion     String?   @map("algorithm_version") @db.VarChar(50)
+  configurationVersion String?   @map("configuration_version") @db.VarChar(50)
+  modelVersion         String?   @map("model_version") @db.VarChar(50)
+  diagnostics          Json?     @db.JsonB
+  error                String?   @db.Text
+  startedAt            DateTime  @default(now()) @map("started_at") @db.Timestamptz()
+  completedAt          DateTime? @map("completed_at") @db.Timestamptz()
+
+  test Test @relation(fields: [testId], references: [id], onDelete: Cascade)
+
+  @@index([testId])
+  @@map("processing_runs")
+}
+
+// ============================================================
+// Classification (Extended Phase 3 + Safety Hardening)
+// ============================================================
+
+model Classification {
+  id     String @id @default(uuid()) @db.Uuid
+  testId String @unique @map("test_id") @db.Uuid
+
+  // DEPRECATED: Legacy fields kept for backward compatibility only
+  // DO NOT use for new implementations - use colorimetric fields below
+  result     String? @db.VarChar(50) /// @deprecated Use colorDistance + qualityStatus instead
+  confidence Float? /// @deprecated Unsafe for field decisions - use qualityStatus
+
+  /// Observed color in LAB color space: {L, a, b}
+  observedColorLab Json @map("observed_color_lab") @db.JsonB
+
+  /// Delta-E distance to nearest reference color (lower = closer match)
+  colorDistance Float @map("color_distance")
+
+  /// Descriptive label of nearest reference (e.g., "Blue-Purple range")
+  /// NOT a drug identification - purely descriptive of color observation
+  nearestReferenceLabel String? @map("nearest_reference_label") @db.VarChar(200)
+
+  /// Quality assessment: ACCEPTABLE, MARGINAL, REJECTED
+  qualityStatus String @map("quality_status") @db.VarChar(50)
+
+  /// Specific quality issues: ["COLOR_DISTANCE_HIGH", "EXTREME_LIGHTNESS", ...]
+  qualityIssues Json? @map("quality_issues") @db.JsonB
+
+  /// Presumptive substance label (nullable - only if operator/supervisor provides interpretation)
+  /// MUST be accompanied by operator interpretation record and disclaimer
+  presumptiveLabel String? @map("presumptive_label") @db.VarChar(100)
+
+  /// Validation status: UNVALIDATED, PILOT, VALIDATED
+  validationStatus String @default("UNVALIDATED") @map("validation_status") @db.VarChar(50)
+
+  /// Kit code used for this classification
+  kitCode String @map("kit_code") @db.VarChar(50)
+
+  /// Pipeline identifier for reproducibility
+  pipelineId String? @map("pipeline_id") @db.VarChar(100)
+
+  algorithmVersion     String @map("algorithm_version") @db.VarChar(50)
+  modelVersion         String @map("model_version") @db.VarChar(50)
+  configurationVersion String @map("configuration_version") @db.VarChar(50)
+
+  /// Feature vector used for classification (LAB, HSV, etc.)
+  features Json @db.JsonB
+
+  /// Additional diagnostics and metadata
+  diagnostics Json? @db.JsonB
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz()
+
+  test                    Test                     @relation(fields: [testId], references: [id], onDelete: Cascade)
+  operatorInterpretations OperatorInterpretation[]
+
+  @@index([validationStatus])
+  @@index([qualityStatus])
+  @@map("classifications")
+}
+
+// ============================================================
+// Operator Interpretation (Safety: Human-in-the-Loop)
+// ============================================================
+
+model OperatorInterpretation {
+  id               String @id @default(uuid()) @db.Uuid
+  classificationId String @map("classification_id") @db.Uuid
+  testId           String @map("test_id") @db.Uuid
+  interpretedById  String @map("interpreted_by_id") @db.Uuid
+
+  /// What the operator visually observed
+  visualObservation String @map("visual_observation") @db.Text
+
+  /// Selected color from reference chart (if kit provides one)
+  selectedReferenceColor String? @map("selected_reference_color") @db.VarChar(200)
+
+  /// Operator's presumptive interpretation (optional - may be "No interpretation")
+  presumptiveInterpretation String? @map("presumptive_interpretation") @db.VarChar(200)
+
+  /// Agreement with machine measurement: AGREE, DISAGREE, UNCERTAIN
+  agreementWithMachine String @map("agreement_with_machine") @db.VarChar(50)
+
+  /// If disagrees, reason for disagreement
+  disagreementReason String? @map("disagreement_reason") @db.Text
+
+  /// Reading was taken within kit's specified time window
+  withinReadingWindow Boolean @map("within_reading_window")
+
+  /// Actual reading time in seconds (if outside window, reason required)
+  actualReadingTime Int? @map("actual_reading_time")
+
+  /// If reading outside window, mandatory explanation
+  readingTimeViolationReason String? @map("reading_time_violation_reason") @db.Text
+
+  /// Operator acknowledged presumptive-only disclaimer
+  disclaimerAcknowledged Boolean @default(false) @map("disclaimer_acknowledged")
+
+  /// Additional notes
+  notes String? @db.Text
+
+  interpretedAt DateTime @default(now()) @map("interpreted_at") @db.Timestamptz()
+
+  classification Classification @relation(fields: [classificationId], references: [id], onDelete: Cascade)
+  test           Test           @relation(fields: [testId], references: [id], onDelete: Cascade)
+  operator       User           @relation("OperatorInterpretations", fields: [interpretedById], references: [id], onDelete: Restrict)
+
+  @@index([classificationId])
+  @@index([testId])
+  @@index([interpretedById])
+  @@map("operator_interpretations")
+}
+
+// ============================================================
+// Test Review (Phase 3)
+// ============================================================
+
+model TestReview {
+  id           String   @id @default(uuid()) @db.Uuid
+  testId       String   @map("test_id") @db.Uuid
+  reviewerId   String   @map("reviewer_id") @db.Uuid
+  /// REVIEWED_CONFIRMED or REVIEWED_OVERRIDDEN
+  decision     String   @db.VarChar(50)
+  /// Mandatory reason for overrides
+  reason       String   @db.Text
+  /// Optional revised presumptive label (for overrides)
+  revisedLabel String?  @map("revised_label") @db.VarChar(100)
+  reviewedAt   DateTime @default(now()) @map("reviewed_at") @db.Timestamptz()
+
+  test     Test @relation(fields: [testId], references: [id], onDelete: Cascade)
+  reviewer User @relation(fields: [reviewerId], references: [id], onDelete: Restrict)
+
+  @@index([testId])
+  @@index([reviewerId])
+  @@map("test_reviews")
+}
+
+// ============================================================
+// Lab Confirmation (Phase 3)
+// ============================================================
+
+model LabConfirmation {
+  id                 String              @id @default(uuid()) @db.Uuid
+  testId             String              @unique @map("test_id") @db.Uuid
+  confirmedById      String              @map("confirmed_by_id") @db.Uuid
+  method             LabMethod
+  confirmedSubstance String              @map("confirmed_substance") @db.VarChar(255)
+  labReferenceNumber String              @map("lab_reference_number") @db.VarChar(100)
+  reportDate         DateTime            @map("report_date") @db.Timestamptz()
+  /// Optional attached lab report file (storage path)
+  reportFilePath     String?             @map("report_file_path") @db.VarChar(1024)
+  /// Agreement outcome: TP/FP/TN/FN/NOT_APPLICABLE
+  outcome            ConfirmationOutcome
+  notes              String?             @db.Text
+  createdAt          DateTime            @default(now()) @map("created_at") @db.Timestamptz()
+
+  test        Test @relation(fields: [testId], references: [id], onDelete: Cascade)
+  confirmedBy User @relation(fields: [confirmedById], references: [id], onDelete: Restrict)
+
+  @@index([testId])
+  @@index([outcome])
+  @@index([reportDate])
+  @@map("lab_confirmations")
+}
+
+// ============================================================
+// Image Asset (Phase 2)
+// ============================================================
+
+model ImageAsset {
+  id               String   @id @default(uuid()) @db.Uuid
+  testId           String   @map("test_id") @db.Uuid
+  /// SHA-256 computed by client (untrusted, for comparison)
+  clientHash       String   @map("client_hash") @db.VarChar(64)
+  /// SHA-256 computed by server after receipt (canonical)
+  serverHash       String   @map("server_hash") @db.VarChar(64)
+  originalFilename String   @map("original_filename") @db.VarChar(255)
+  mimeType         String   @map("mime_type") @db.VarChar(100)
+  sizeBytes        Int      @map("size_bytes")
+  /// Capture metadata: GPS, deviceId, deviceTime, ambientLight, etc.
+  captureMetadata  Json?    @map("capture_metadata") @db.JsonB
+  /// Storage backend identifier (local, s3, etc.)
+  storageBackend   String   @map("storage_backend") @db.VarChar(20)
+  /// Local filesystem path or S3 key
+  storagePath      String   @map("storage_path") @db.VarChar(1024)
+  uploadedAt       DateTime @default(now()) @map("uploaded_at") @db.Timestamptz()
+
+  test Test @relation(fields: [testId], references: [id], onDelete: Cascade)
+
+  @@unique([testId]) // One image per test (idempotency)
+  @@index([serverHash])
+  @@map("image_assets")
+}
+
+// ============================================================
+// Signing Key (Phase 2)
+// ============================================================
+
+enum SigningKeyStatus {
+  ACTIVE
+  RETIRED
+}
+
+model SigningKey {
+  id            String           @id @default(uuid()) @db.Uuid
+  kid           String           @unique @db.VarChar(50) /// Key ID for JWKS / verification
+  algorithm     String           @db.VarChar(50) /// e.g., RS256
+  publicKeyPem  String           @map("public_key_pem") @db.Text
+  /// Server-side only: not exposed via API
+  privateKeyPem String?          @map("private_key_pem") @db.Text
+  status        SigningKeyStatus @default(ACTIVE)
+  createdAt     DateTime         @default(now()) @map("created_at") @db.Timestamptz()
+  retiredAt     DateTime?        @map("retired_at") @db.Timestamptz()
+
+  evidenceRecords EvidenceRecord[]
+
+  @@map("signing_keys")
+}
+
+// ============================================================
+// Evidence Record (Phase 2: Extended)
+// ============================================================
+
+model EvidenceRecord {
+  id                      String   @id @default(uuid()) @db.Uuid
+  testId                  String   @unique @map("test_id") @db.Uuid
+  /// Canonical record format version (1 = legacy, 2 = extended with metadata)
+  version                 Int      @default(2)
+  schemaVersion           String   @map("schema_version") @db.VarChar(10)
+  canonicalizationVersion String   @map("canonicalization_version") @db.VarChar(10)
+  /// SHA-256 from client (if provided, null for legacy)
+  clientImageHash         String?  @map("client_image_hash") @db.VarChar(64)
+  /// SHA-256 computed by server (canonical source of truth)
+  serverImageHash         String   @map("server_image_hash") @db.VarChar(64)
+  /// Capture metadata replicated from ImageAsset
+  captureMetadata         Json?    @map("capture_metadata") @db.JsonB
+  /// Hash of the previous record in the chain (null for first record)
+  previousRecordHash      String?  @map("previous_record_hash") @db.VarChar(64)
+  /// Monotonic index in the chain (0-based)
+  chainIndex              Int      @map("chain_index")
+  /// Hash of the canonicalized record (before signing)
+  recordHash              String   @map("record_hash") @db.VarChar(128)
+  hashingAlgorithm        String   @map("hashing_algorithm") @db.VarChar(50)
+  signature               String   @db.Text
+  signatureAlgorithm      String   @map("signature_algorithm") @db.VarChar(50)
+  /// References SigningKey.kid
+  signerKeyId             String   @map("signer_key_id") @db.VarChar(100)
+  /// Optional RFC 3161 timestamp token
+  timestampToken          String?  @map("timestamp_token") @db.Text
+  signedAt                DateTime @map("signed_at") @db.Timestamptz()
+  verificationStatus      String?  @map("verification_status") @db.VarChar(50)
+  createdAt               DateTime @default(now()) @map("created_at") @db.Timestamptz()
+
+  test       Test        @relation(fields: [testId], references: [id], onDelete: Restrict)
+  signingKey SigningKey? @relation(fields: [signerKeyId], references: [kid])
+
+  @@index([chainIndex])
+  @@index([signerKeyId])
+  @@index([recordHash])
+  @@map("evidence_records")
+}
+
+// ============================================================
+// Scientific Dataset & Provenance (Phase 4 / Stage D)
+// ============================================================
+
+enum DatasetSampleStatus {
+  INGESTED
+  PENDING_VERIFICATION
+  VERIFIED_FOR_DEVELOPMENT
+  ELIGIBLE_FOR_EVALUATION
+  EXCLUDED
+  DISPUTED
+}
+
+enum GroundTruthState {
+  PENDING_LAB_RESULT
+  LAB_RESULT_RECEIVED
+  PENDING_REVIEW
+  VERIFIED
+  DISPUTED
+  REJECTED
+}
+
+model PilotProtocol {
+  id              String   @id @default(uuid()) @db.Uuid
+  protocolVersion String   @unique @map("protocol_version") @db.VarChar(50)
+  description     String
+  assayConfigs    Json     @map("assay_configs") @db.JsonB
+  isActive        Boolean  @default(true) @map("is_active")
+  createdAt       DateTime @default(now()) @map("created_at") @db.Timestamptz()
+  updatedAt       DateTime @updatedAt @map("updated_at") @db.Timestamptz()
+
+  samples         DatasetSample[]
+  enrollments     PilotEnrollment[]
+
+  @@map("pilot_protocols")
+}
+
+model PilotSite {
+  id          String   @id @default(uuid()) @db.Uuid
+  siteCode    String   @unique @map("site_code") @db.VarChar(100)
+  name        String   @db.VarChar(255)
+  isActive    Boolean  @default(true) @map("is_active")
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz()
+  
+  enrollments PilotEnrollment[]
+
+  @@map("pilot_sites")
+}
+
+model PilotEnrollment {
+  id          String   @id @default(uuid()) @db.Uuid
+  protocolId  String   @map("protocol_id") @db.Uuid
+  userId      String   @map("user_id") @db.Uuid
+  siteId      String?  @map("site_id") @db.Uuid
+  role        String   @db.VarChar(50) // e.g., PILOT_COLLECTOR, PILOT_MANAGER
+  isActive    Boolean  @default(true) @map("is_active")
+  enrolledAt  DateTime @default(now()) @map("enrolled_at") @db.Timestamptz()
+
+  protocol    PilotProtocol @relation(fields: [protocolId], references: [id], onDelete: Cascade)
+  user        User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  site        PilotSite?    @relation(fields: [siteId], references: [id], onDelete: SetNull)
+
+  @@unique([protocolId, userId])
+  @@map("pilot_enrollments")
+}
+
+model DatasetSampleCustody {
+  id              String   @id @default(uuid()) @db.Uuid
+  datasetSampleId String   @map("dataset_sample_id") @db.Uuid
+  action          CustodyAction
+  userId          String?  @map("user_id") @db.Uuid // Authorized sender/receiver
+  labId           String?  @map("lab_id") @db.Uuid // Target laboratory ID (could map to Organization or specific lab entity)
+  timestamp       DateTime @default(now()) @db.Timestamptz()
+  condition       String?  @db.Text
+  notes           String?  @db.Text
+
+  datasetSample   DatasetSample @relation(fields: [datasetSampleId], references: [id], onDelete: Cascade)
+  user            User?         @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([datasetSampleId])
+  @@index([timestamp(sort: Desc)])
+  @@map("dataset_sample_custody")
+}
+
+model DatasetSample {
+  id              String   @id @default(uuid()) @db.Uuid
+  datasetVersion  String   @map("dataset_version") @db.VarChar(50)
+  
+  // Pilot Protocol
+  protocolId      String?  @map("protocol_id") @db.Uuid
+  
+  // Identity & Integrity
+  originalTestId  String?  @unique @map("original_test_id") @db.Uuid
+  imageHash       String   @map("image_hash") @db.VarChar(64)
+  evidenceRecordId String? @map("evidence_record_id") @db.Uuid
+  
+  // Assay & Collection
+  kitCode         String   @map("kit_code") @db.VarChar(50)
+  reagentLot      String?  @map("reagent_lot") @db.VarChar(100)
+  collectionSite  String?  @map("collection_site") @db.VarChar(100)
+  captureSessionId String? @map("capture_session_id") @db.VarChar(100)
+  operatorId      String?  @map("operator_id") @db.Uuid
+  deviceMetadata  Json?    @map("device_metadata") @db.JsonB
+  environmentData Json?    @map("environment_data") @db.JsonB
+  
+  // Reference & Measurements
+  referenceCardVersion String? @map("reference_card_version") @db.VarChar(50)
+  calibrationConfig   String? @map("calibration_config") @db.VarChar(50)
+  rawMeasurements     Json?   @map("raw_measurements") @db.JsonB
+  calibratedMeasurements Json? @map("calibrated_measurements") @db.JsonB
+  qualityAssessment   Json?   @map("quality_assessment") @db.JsonB
+  
+  // Ground Truth Laboratory Workflow
+  groundTruthState    GroundTruthState @default(PENDING_LAB_RESULT) @map("ground_truth_state")
+  labSampleId         String? @map("lab_sample_id") @db.VarChar(100)
+  labReportRef        String? @map("lab_report_ref") @db.VarChar(255)
+  referenceMethod     String? @map("reference_method") @db.VarChar(100)
+  groundTruthLabel    String? @map("ground_truth_label") @db.VarChar(100)
+  groundTruthValue    Float?  @map("ground_truth_value")
+  groundTruthUnits    String? @map("ground_truth_units") @db.VarChar(50)
+  groundTruthUncertainty Float? @map("ground_truth_uncertainty")
+  groundTruthTimestamp DateTime? @map("ground_truth_timestamp") @db.Timestamptz()
+  labelingProtocolVersion String? @map("labeling_protocol_version") @db.VarChar(50)
+  reviewerId          String? @map("reviewer_id") @db.Uuid
+  
+  // Privacy
+  consentStatus       String? @map("consent_status") @db.VarChar(50)
+  retentionPolicy     String? @map("retention_policy") @db.VarChar(100)
+  
+  // Status
+  status              DatasetSampleStatus @default(INGESTED)
+  exclusionReason     String? @map("exclusion_reason") @db.Text
+  
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz()
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz()
+
+  protocol       PilotProtocol? @relation(fields: [protocolId], references: [id], onDelete: SetNull)
+  test           Test?   @relation(fields: [originalTestId], references: [id], onDelete: SetNull)
+  reviewer       User?   @relation(fields: [reviewerId], references: [id], onDelete: SetNull)
+  custodyEvents  DatasetSampleCustody[]
+
+  @@index([datasetVersion])
+  @@index([status])
+  @@index([groundTruthState])
+  @@index([kitCode])
+  @@index([operatorId])
+  @@index([imageHash])
+  @@map("dataset_samples")
+}
+

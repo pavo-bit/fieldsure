@@ -1,0 +1,144 @@
+# FieldSure — Docker Compose
+# Development environment with all services and infrastructure
+
+services:
+  # ============================================
+  # Infrastructure
+  # ============================================
+  postgres:
+    image: postgres:16-alpine
+    container_name: fieldsure-postgres
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-fieldsure}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-fieldsure_dev}
+      POSTGRES_DB: ${POSTGRES_DB:-fieldsure}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-fieldsure}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    container_name: fieldsure-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  minio:
+    image: minio/minio:latest
+    container_name: fieldsure-minio
+    environment:
+      MINIO_ROOT_USER: ${S3_ACCESS_KEY:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${S3_SECRET_KEY:-minioadmin}
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - minio-data:/data
+    command: server /data --console-address ":9001"
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Create default bucket on startup
+  minio-init:
+    image: minio/mc:latest
+    container_name: fieldsure-minio-init
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: >
+      /bin/sh -c "
+      mc alias set fieldsure http://minio:9000 $${MINIO_ROOT_USER:-minioadmin} $${MINIO_ROOT_PASSWORD:-minioadmin};
+      mc mb fieldsure/$${S3_BUCKET:-fieldsure-images} --ignore-existing;
+      exit 0;
+      "
+
+  # ============================================
+  # Application Services (for containerised dev)
+  # ============================================
+  api:
+    build:
+      context: ./apps/api
+      dockerfile: ../../infrastructure/docker/Dockerfile.api
+    container_name: fieldsure-api
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-fieldsure}:${POSTGRES_PASSWORD:-fieldsure_dev}@postgres:5432/${POSTGRES_DB:-fieldsure}
+      REDIS_URL: redis://redis:6379
+      JWT_SECRET: ${JWT_SECRET:-dev-jwt-secret-change-in-production}
+      JWT_EXPIRY: ${JWT_EXPIRY:-15m}
+      JWT_REFRESH_EXPIRY: ${JWT_REFRESH_EXPIRY:-7d}
+      S3_ENDPOINT: http://minio:9000
+      S3_ACCESS_KEY: ${S3_ACCESS_KEY:-minioadmin}
+      S3_SECRET_KEY: ${S3_SECRET_KEY:-minioadmin}
+      S3_BUCKET: ${S3_BUCKET:-fieldsure-images}
+      ML_SERVICE_URL: http://ml-service:8000
+      ML_SHARED_SECRET: ${ML_SHARED_SECRET:-dev-ml-secret-change-in-production}
+      NODE_ENV: development
+    ports:
+      - "3000:3000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    profiles:
+      - full
+    networks:
+      - internal
+      - default
+
+  ml-service:
+    build:
+      context: ./apps/ml-service
+      dockerfile: ../../infrastructure/docker/Dockerfile.ml
+    container_name: fieldsure-ml-service
+    environment:
+      ML_DEBUG: "true"
+      ML_BIND_HOST: "0.0.0.0"
+      ML_SHARED_SECRET: ${ML_SHARED_SECRET:-dev-ml-secret-change-in-production}
+      ML_S3_ENDPOINT: http://minio:9000
+      ML_S3_ACCESS_KEY: ${S3_ACCESS_KEY:-minioadmin}
+      ML_S3_SECRET_KEY: ${S3_SECRET_KEY:-minioadmin}
+      ML_S3_BUCKET: ${S3_BUCKET:-fieldsure-images}
+      ML_API_SERVICE_URL: http://api:3000
+      ML_ALLOWED_IMAGE_HOSTS: '["minio","localhost"]'
+      ML_CORS_ORIGINS: '[]'
+    # Expose on localhost only in dev (internal service)
+    ports:
+      - "127.0.0.1:8000:8000"
+    depends_on:
+      minio:
+        condition: service_healthy
+    profiles:
+      - full
+    networks:
+      - internal
+
+volumes:
+  postgres-data:
+  redis-data:
+  minio-data:
+
+networks:
+  # Internal network for service-to-service communication
+  internal:
+    driver: bridge
+  # Default network for external access
+  default:
+    driver: bridge

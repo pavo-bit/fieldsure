@@ -1,0 +1,1366 @@
+openapi: 3.0.3
+info:
+  title: FieldSure API
+  description: |
+    API for **FieldSure — Digital Companion for Field Drug Testing**.
+
+    FieldSure captures colorimetric field-test images, validates quality,
+    calibrates against a reference card, runs a configuration-driven
+    classification pipeline, and produces cryptographically signed
+    evidence records with full chain-of-custody metadata.
+
+    > **Scientific Limitation:** No scientifically validated model is
+    > currently available. The CV/ML infrastructure is implemented and
+    > ready for validated, kit-specific labeled data. The current
+    > classification configuration identifier is `DEMO-CONFIG-v1`.
+  version: 0.1.0
+  contact:
+    name: FieldSure Development Team
+
+servers:
+  - url: http://localhost:3000
+    description: Local development server
+
+# ============================================================
+# Security
+# ============================================================
+security: []   # default — each endpoint declares its own
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: |
+        JWT access token issued by `POST /api/v1/auth/login`.
+        Include as `Authorization: Bearer <token>`.
+        Tokens expire (default 15 m) and can be refreshed via
+        `POST /api/v1/auth/refresh`.
+
+  # ============================================================
+  # Reusable Schemas
+  # ============================================================
+  schemas:
+
+    # ---------- Meta ----------
+    Meta:
+      type: object
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+      required: [timestamp]
+
+    # ---------- Error ----------
+    ErrorResponse:
+      type: object
+      properties:
+        error:
+          type: object
+          properties:
+            code:
+              type: integer
+              example: 400
+            message:
+              type: string
+              example: Validation failed
+            details:
+              type: array
+              items:
+                type: string
+              description: Present only for validation errors (class-validator).
+          required: [code, message]
+        meta:
+          $ref: '#/components/schemas/Meta'
+      required: [error, meta]
+
+    # ---------- Auth ----------
+    LoginRequest:
+      type: object
+      properties:
+        email:
+          type: string
+          format: email
+          example: demo@fieldsure.dev
+        password:
+          type: string
+          minLength: 8
+          example: DemoPass1
+      required: [email, password]
+
+    RefreshTokenRequest:
+      type: object
+      properties:
+        refreshToken:
+          type: string
+          format: uuid
+          example: "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
+      required: [refreshToken]
+
+    UserResponse:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        operatorId:
+          type: string
+          example: BADGE-001
+        name:
+          type: string
+          example: Officer Demo
+        email:
+          type: string
+          format: email
+        role:
+          $ref: '#/components/schemas/UserRole'
+        isActive:
+          type: boolean
+        lastLoginAt:
+          type: string
+          format: date-time
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+      required: [id, operatorId, name, email, role, isActive, createdAt]
+
+    AuthResponse:
+      type: object
+      properties:
+        accessToken:
+          type: string
+          description: JWT access token.
+        refreshToken:
+          type: string
+          description: Opaque refresh token (UUID).
+        user:
+          $ref: '#/components/schemas/UserResponse'
+      required: [accessToken, refreshToken, user]
+
+    # ---------- Users ----------
+    UserRole:
+      type: string
+      enum: [ADMIN, SUPERVISOR, OPERATOR]
+
+    CreateUserRequest:
+      type: object
+      properties:
+        operatorId:
+          type: string
+          example: BADGE-042
+        name:
+          type: string
+          example: Jane Doe
+        email:
+          type: string
+          format: email
+        password:
+          type: string
+          minLength: 8
+        role:
+          $ref: '#/components/schemas/UserRole'
+      required: [operatorId, name, email, password]
+
+    UpdateUserRequest:
+      type: object
+      properties:
+        name:
+          type: string
+        email:
+          type: string
+          format: email
+        role:
+          $ref: '#/components/schemas/UserRole'
+        isActive:
+          type: boolean
+        operatorId:
+          type: string
+
+    # ---------- Test Kits ----------
+    TestKit:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        code:
+          type: string
+          example: DEMO-KIT-01
+        name:
+          type: string
+          example: Demo Colorimetric Kit (Marquis)
+        manufacturer:
+          type: string
+        description:
+          type: string
+          nullable: true
+        active:
+          type: boolean
+        configurationVersion:
+          type: string
+          example: v1.0.0
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+      required: [id, code, name, manufacturer, active, configurationVersion]
+
+    # ---------- Tests ----------
+    TestStatus:
+      type: string
+      enum:
+        - DRAFT
+        - CAPTURED
+        - UPLOADING
+        - PROCESSING
+        - COMPLETED
+        - INCONCLUSIVE
+        - FAILED
+        - PENDING_SYNC
+
+    CreateTestRequest:
+      type: object
+      description: |
+        The optional `id` field acts as an **idempotency key**.
+        If a test with the supplied `id` already exists the server
+        returns the existing record instead of creating a duplicate.
+      properties:
+        id:
+          type: string
+          format: uuid
+          description: Client-generated UUID (idempotency key).
+        kitId:
+          type: string
+          format: uuid
+        caseId:
+          type: string
+        sampleId:
+          type: string
+        deviceId:
+          type: string
+        clientCreatedAt:
+          type: string
+          format: date-time
+      required: [kitId, clientCreatedAt]
+
+    UpdateTestStatusRequest:
+      type: object
+      properties:
+        status:
+          $ref: '#/components/schemas/TestStatus'
+      required: [status]
+
+    Test:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        testNumber:
+          type: string
+          example: FS-2026-000001
+        caseId:
+          type: string
+          nullable: true
+        sampleId:
+          type: string
+          nullable: true
+        operatorId:
+          type: string
+          format: uuid
+        deviceId:
+          type: string
+          nullable: true
+        kitId:
+          type: string
+          format: uuid
+        status:
+          $ref: '#/components/schemas/TestStatus'
+        result:
+          type: string
+          nullable: true
+          description: "POSITIVE, NEGATIVE, or INCONCLUSIVE"
+        confidence:
+          type: number
+          format: float
+          nullable: true
+        algorithmVersion:
+          type: string
+          nullable: true
+        configurationVersion:
+          type: string
+          nullable: true
+        clientCreatedAt:
+          type: string
+          format: date-time
+        serverCreatedAt:
+          type: string
+          format: date-time
+        startedAt:
+          type: string
+          format: date-time
+          nullable: true
+        completedAt:
+          type: string
+          format: date-time
+          nullable: true
+      required: [id, testNumber, operatorId, kitId, status, clientCreatedAt, serverCreatedAt]
+
+    TestListResponse:
+      type: object
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/Test'
+        total:
+          type: integer
+        page:
+          type: integer
+        limit:
+          type: integer
+        totalPages:
+          type: integer
+      required: [items, total, page, limit, totalPages]
+
+    QueryTestsParams:
+      type: object
+      properties:
+        search:
+          type: string
+          description: Free-text search across testNumber, caseId, sampleId, operatorId.
+        result:
+          type: string
+          description: "Filter: All, POSITIVE, NEGATIVE, INCONCLUSIVE, PENDING, FAILED"
+        syncStatus:
+          type: string
+        verificationStatus:
+          type: string
+          description: "All, Verified, Not yet verified, Integrity failed"
+        sort:
+          type: string
+          enum: [asc, desc]
+          default: desc
+        page:
+          type: string
+          default: "1"
+        limit:
+          type: string
+          default: "20"
+
+    # ---------- Processing ----------
+    ProcessImageRequest:
+      type: object
+      properties:
+        imageUrl:
+          type: string
+          description: S3/MinIO URL of the captured image.
+      required: [imageUrl]
+
+    Classification:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        testId:
+          type: string
+          format: uuid
+        result:
+          type: string
+          enum: [POSITIVE, NEGATIVE, INCONCLUSIVE]
+          deprecated: true
+          description: Legacy field. Use colorDistance + qualityStatus instead.
+        confidence:
+          type: number
+          format: float
+          nullable: true
+          deprecated: true
+        observedColorLab:
+          type: object
+          description: Observed color in LAB color space (L, a, b).
+        colorDistance:
+          type: number
+          format: float
+          description: Delta-E distance to nearest reference color.
+        nearestReferenceLabel:
+          type: string
+          nullable: true
+          description: Descriptive label of nearest reference (NOT a drug identification).
+        qualityStatus:
+          type: string
+          enum: [ACCEPTABLE, MARGINAL, REJECTED]
+        qualityIssues:
+          type: array
+          items:
+            type: string
+          nullable: true
+        presumptiveLabel:
+          type: string
+          nullable: true
+          description: Presumptive substance label provided by operator interpretation.
+        validationStatus:
+          type: string
+          enum: [UNVALIDATED, PILOT, VALIDATED]
+          default: UNVALIDATED
+        kitCode:
+          type: string
+        pipelineId:
+          type: string
+          nullable: true
+        algorithmVersion:
+          type: string
+          example: colorimetric-demo-v1
+        modelVersion:
+          type: string
+          example: DEMO-UNVALIDATED-v1
+        configurationVersion:
+          type: string
+        features:
+          type: object
+          nullable: true
+        diagnostics:
+          type: object
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+      required: [id, testId, observedColorLab, colorDistance, qualityStatus, algorithmVersion, modelVersion, configurationVersion, kitCode, validationStatus]
+
+    # ---------- Evidence ----------
+    EvidenceRecord:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        testId:
+          type: string
+          format: uuid
+        schemaVersion:
+          type: string
+          example: "1.0"
+        canonicalizationVersion:
+          type: string
+          example: "1.0"
+        imageHash:
+          type: string
+          description: SHA-256 hex digest of the captured image.
+        recordHash:
+          type: string
+          description: SHA-256 hex digest of the canonical JSON record.
+        hashingAlgorithm:
+          type: string
+          example: SHA-256
+        signature:
+          type: string
+          description: Base64-encoded RSA-SHA256 digital signature.
+        signatureAlgorithm:
+          type: string
+          example: RSA-SHA256
+        signerKeyId:
+          type: string
+          example: dev-key-1
+        signedAt:
+          type: string
+          format: date-time
+        verificationStatus:
+          type: string
+          enum: [VERIFIED, INTEGRITY_FAILED]
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+      required:
+        - id
+        - testId
+        - schemaVersion
+        - canonicalizationVersion
+        - imageHash
+        - recordHash
+        - hashingAlgorithm
+        - signature
+        - signatureAlgorithm
+        - signerKeyId
+        - signedAt
+
+    VerificationResult:
+      type: object
+      properties:
+        verified:
+          type: boolean
+        integrity:
+          type: string
+          enum: [VERIFIED, INTEGRITY_FAILED]
+        imageIntegrity:
+          type: string
+          enum: [VALID, FAILED]
+        recordIntegrity:
+          type: string
+          enum: [VALID, FAILED]
+        signature:
+          type: string
+          enum: [VALID, FAILED]
+        recordHash:
+          type: string
+        algorithm:
+          type: string
+          example: SHA-256
+        signatureAlgorithm:
+          type: string
+          example: RSA-SHA256
+        signerKeyId:
+          type: string
+        verifiedAt:
+          type: string
+          format: date-time
+      required:
+        - verified
+        - integrity
+        - imageIntegrity
+        - recordIntegrity
+        - signature
+        - recordHash
+        - algorithm
+        - signatureAlgorithm
+        - signerKeyId
+        - verifiedAt
+
+# ============================================================
+# Tags
+# ============================================================
+tags:
+  - name: Health
+    description: Root health/status endpoint.
+  - name: Authentication
+    description: Login, token refresh, logout, and profile.
+  - name: Users
+    description: User management (ADMIN / SUPERVISOR only).
+  - name: Test Kits
+    description: Colorimetric test-kit catalogue.
+  - name: Tests
+    description: Field-test lifecycle — create, search, status, process.
+  - name: Evidence
+    description: Cryptographic evidence records and integrity verification.
+  - name: ML Service (Internal)
+    description: |
+      Internal Python FastAPI service consumed by the NestJS backend.
+      **Not intended for direct mobile/client access.**
+
+# ============================================================
+# Paths
+# ============================================================
+paths:
+
+  # ---------- Root ----------
+  /:
+    get:
+      tags: [Health]
+      summary: Root health check
+      operationId: getRoot
+      responses:
+        '200':
+          description: API is running.
+          content:
+            text/plain:
+              schema:
+                type: string
+                example: Hello World!
+
+  # ==========================================================
+  # Authentication
+  # ==========================================================
+  /api/v1/auth/login:
+    post:
+      tags: [Authentication]
+      summary: Authenticate operator
+      operationId: login
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LoginRequest'
+      responses:
+        '200':
+          description: Login successful.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: '#/components/schemas/AuthResponse'
+                  meta:
+                    $ref: '#/components/schemas/Meta'
+        '401':
+          description: Invalid credentials.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Account deactivated.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '429':
+          description: Rate limited (5 attempts per 15 minutes).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/v1/auth/refresh:
+    post:
+      tags: [Authentication]
+      summary: Refresh access token
+      description: |
+        Implements **token rotation**: the old session is revoked and
+        a new session with fresh tokens is created.
+      operationId: refreshToken
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RefreshTokenRequest'
+      responses:
+        '200':
+          description: Tokens rotated successfully.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: '#/components/schemas/AuthResponse'
+                  meta:
+                    $ref: '#/components/schemas/Meta'
+        '401':
+          description: Invalid or expired refresh token.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Account deactivated.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/v1/auth/logout:
+    post:
+      tags: [Authentication]
+      summary: Logout (revoke all sessions)
+      operationId: logout
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Logged out.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: object
+                    properties:
+                      message:
+                        type: string
+                        example: Logged out successfully
+                  meta:
+                    $ref: '#/components/schemas/Meta'
+        '401':
+          description: Not authenticated.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/v1/auth/me:
+    get:
+      tags: [Authentication]
+      summary: Get current user profile
+      operationId: getProfile
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: User profile.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: '#/components/schemas/UserResponse'
+                  meta:
+                    $ref: '#/components/schemas/Meta'
+        '401':
+          description: Not authenticated or account deactivated.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  # ==========================================================
+  # Users
+  # ==========================================================
+  /api/v1/users:
+    post:
+      tags: [Users]
+      summary: Create a new user
+      operationId: createUser
+      security:
+        - bearerAuth: []
+      description: "**Requires role:** ADMIN"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateUserRequest'
+      responses:
+        '201':
+          description: User created.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: '#/components/schemas/UserResponse'
+                  meta:
+                    $ref: '#/components/schemas/Meta'
+        '400':
+          description: Validation failed.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Not authenticated.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Insufficient role.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: Duplicate email or operatorId.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+    get:
+      tags: [Users]
+      summary: List all users
+      operationId: listUsers
+      security:
+        - bearerAuth: []
+      description: "**Requires role:** ADMIN or SUPERVISOR"
+      responses:
+        '200':
+          description: User list.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/UserResponse'
+                  meta:
+                    $ref: '#/components/schemas/Meta'
+        '401':
+          description: Not authenticated.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Insufficient role.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/v1/users/{id}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    get:
+      tags: [Users]
+      summary: Get user by ID
+      operationId: getUser
+      security:
+        - bearerAuth: []
+      description: "**Requires role:** ADMIN or SUPERVISOR"
+      responses:
+        '200':
+          description: User details.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: '#/components/schemas/UserResponse'
+                  meta:
+                    $ref: '#/components/schemas/Meta'
+        '404':
+          description: User not found.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+    patch:
+      tags: [Users]
+      summary: Update user
+      operationId: updateUser
+      security:
+        - bearerAuth: []
+      description: "**Requires role:** ADMIN"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateUserRequest'
+      responses:
+        '200':
+          description: User updated.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: '#/components/schemas/UserResponse'
+                  meta:
+                    $ref: '#/components/schemas/Meta'
+        '404':
+          description: User not found.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: Duplicate email or operatorId.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+    delete:
+      tags: [Users]
+      summary: Deactivate user
+      operationId: deactivateUser
+      security:
+        - bearerAuth: []
+      description: |
+        **Requires role:** ADMIN
+
+        Soft-deletes the user by setting `isActive = false` and
+        revokes all active auth sessions.
+      responses:
+        '200':
+          description: User deactivated.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: object
+                    properties:
+                      message:
+                        type: string
+                        example: User deactivated
+                  meta:
+                    $ref: '#/components/schemas/Meta'
+        '404':
+          description: User not found.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  # ==========================================================
+  # Test Kits
+  # ==========================================================
+  /api/v1/test-kits:
+    get:
+      tags: [Test Kits]
+      summary: List active test kits
+      operationId: listTestKits
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Active test kits.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/TestKit'
+                  meta:
+                    $ref: '#/components/schemas/Meta'
+
+  /api/v1/test-kits/{id}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    get:
+      tags: [Test Kits]
+      summary: Get test kit by ID
+      operationId: getTestKit
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Test kit details.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: '#/components/schemas/TestKit'
+                  meta:
+                    $ref: '#/components/schemas/Meta'
+        '404':
+          description: Test kit not found.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  # ==========================================================
+  # Tests
+  # ==========================================================
+  /api/v1/tests:
+    post:
+      tags: [Tests]
+      summary: Create a new field test
+      operationId: createTest
+      security:
+        - bearerAuth: []
+      description: |
+        Creates a new field test in DRAFT status.
+
+        **Idempotency:** If `id` is provided and a test with that ID
+        already exists, the existing test is returned (HTTP 201)
+        without creating a duplicate. This is essential for offline
+        synchronization retry safety.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateTestRequest'
+      responses:
+        '201':
+          description: Test created (or existing test returned if idempotent).
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: '#/components/schemas/Test'
+                  meta:
+                    $ref: '#/components/schemas/Meta'
+        '400':
+          description: Validation failed.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: Test number collision (auto-retried up to 3 times).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+    get:
+      tags: [Tests]
+      summary: Search / list tests
+      operationId: listTests
+      security:
+        - bearerAuth: []
+      description: |
+        Paginated search with filters. OPERATOR role sees only
+        their own tests; ADMIN and SUPERVISOR see all tests.
+      parameters:
+        - name: search
+          in: query
+          schema:
+            type: string
+          description: Free-text across testNumber, caseId, sampleId, operatorId.
+        - name: result
+          in: query
+          schema:
+            type: string
+          description: "All, POSITIVE, NEGATIVE, INCONCLUSIVE, PENDING, FAILED"
+        - name: verificationStatus
+          in: query
+          schema:
+            type: string
+          description: "All, Verified, Not yet verified"
+        - name: sort
+          in: query
+          schema:
+            type: string
+            enum: [asc, desc]
+            default: desc
+        - name: page
+          in: query
+          schema:
+            type: string
+            default: "1"
+        - name: limit
+          in: query
+          schema:
+            type: string
+            default: "20"
+      responses:
+        '200':
+          description: Paginated test list.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: '#/components/schemas/TestListResponse'
+                  meta:
+                    $ref: '#/components/schemas/Meta'
+
+  /api/v1/tests/{id}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    get:
+      tags: [Tests]
+      summary: Get test by ID
+      operationId: getTest
+      security:
+        - bearerAuth: []
+      description: Returns the test with kit, classification, and evidence record.
+      responses:
+        '200':
+          description: Test details.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: '#/components/schemas/Test'
+                  meta:
+                    $ref: '#/components/schemas/Meta'
+        '404':
+          description: Test not found.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/v1/tests/{id}/status:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    patch:
+      tags: [Tests]
+      summary: Update test status
+      operationId: updateTestStatus
+      security:
+        - bearerAuth: []
+      description: |
+        Transitions the test through the state machine.
+        Valid transitions are enforced server-side by
+        `TestStateMachineService`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateTestStatusRequest'
+      responses:
+        '200':
+          description: Status updated.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: '#/components/schemas/Test'
+                  meta:
+                    $ref: '#/components/schemas/Meta'
+        '400':
+          description: Invalid state transition.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Test not found.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/v1/tests/{id}/process:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    post:
+      tags: [Tests]
+      summary: Submit image for CV/ML processing
+      operationId: processTestImage
+      security:
+        - bearerAuth: []
+      description: |
+        Triggers the backend-to-ML-service processing pipeline.
+        The NestJS server calls the internal Python FastAPI service,
+        persists the ProcessingRun and Classification, and updates
+        the test status.
+
+        **Idempotency:** If the test is already COMPLETED with an
+        existing Classification, the server returns the existing
+        result without re-processing. This prevents duplicate
+        Classification rows on sync retries.
+
+        > The current classification uses `DEMO-CONFIG-v1` — a
+        > demonstration configuration, not a trained model.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ProcessImageRequest'
+      responses:
+        '200':
+          description: Processing result.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: object
+                    properties:
+                      status:
+                        type: string
+                        enum: [completed, failed, not_implemented, inconclusive]
+                      processing_run_id:
+                        type: string
+                      test_id:
+                        type: string
+                      quality:
+                        type: object
+                        nullable: true
+                      classification:
+                        $ref: '#/components/schemas/Classification'
+                      message:
+                        type: string
+                        nullable: true
+                      diagnostics:
+                        type: object
+                  meta:
+                    $ref: '#/components/schemas/Meta'
+        '404':
+          description: Test not found.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/v1/tests/{id}/result:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    get:
+      tags: [Tests]
+      summary: Get classification result
+      operationId: getTestResult
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Classification result.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: '#/components/schemas/Classification'
+                  meta:
+                    $ref: '#/components/schemas/Meta'
+        '404':
+          description: Result not found.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  # ==========================================================
+  # Evidence
+  # ==========================================================
+  /api/v1/tests/{id}/evidence:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    post:
+      tags: [Evidence]
+      summary: Create evidence record
+      operationId: createEvidence
+      security:
+        - bearerAuth: []
+      description: |
+        Generates a cryptographically signed evidence record for a
+        COMPLETED test. The server:
+
+        1. Computes the SHA-256 image hash.
+        2. Builds a canonical JSON representation (sorted keys).
+        3. Hashes the canonical record (SHA-256).
+        4. Signs the canonical record with RSA-SHA256.
+        5. Stores the evidence record with VERIFIED status.
+
+        **Idempotency:** If an evidence record already exists for
+        the test, it is returned without creating a duplicate.
+      responses:
+        '201':
+          description: Evidence record created (or existing returned).
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: '#/components/schemas/EvidenceRecord'
+                  meta:
+                    $ref: '#/components/schemas/Meta'
+        '400':
+          description: Test is not COMPLETED or missing classification.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Test not found.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+    get:
+      tags: [Evidence]
+      summary: Get evidence record
+      operationId: getEvidence
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Evidence record.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: '#/components/schemas/EvidenceRecord'
+                  meta:
+                    $ref: '#/components/schemas/Meta'
+        '404':
+          description: Evidence not found.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/v1/tests/{id}/verify:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    post:
+      tags: [Evidence]
+      summary: Verify evidence integrity
+      operationId: verifyEvidence
+      security:
+        - bearerAuth: []
+      description: |
+        Re-computes hashes and verifies the digital signature to
+        detect any tampering. Returns detailed integrity status
+        for each component (image, record, signature).
+
+        - **VERIFIED**: All integrity checks pass.
+        - **INTEGRITY_FAILED**: At least one component has been modified.
+      responses:
+        '200':
+          description: Verification result.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: '#/components/schemas/VerificationResult'
+                  meta:
+                    $ref: '#/components/schemas/Meta'
+        '404':
+          description: Evidence not found.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'

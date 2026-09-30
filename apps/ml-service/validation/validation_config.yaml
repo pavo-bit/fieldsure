@@ -1,0 +1,71 @@
+# FieldSure ML Pipeline Validation Configuration
+# Defines dataset paths, split strategy, metrics thresholds
+
+dataset:
+  # Source data (JSONL export from Phase 3 or local folder + CSV labels)
+  source_type: jsonl  # or "folder"
+  source_path: "./datasets/field_tests.jsonl"
+  labels_csv: null  # For folder mode: "./datasets/labels.csv"
+  
+  # Test split configuration
+  test_split_ratio: 0.2
+  stratify_by: result  # Ensure balanced classes
+  group_by: [session_id, device_id]  # Prevent leakage
+  random_seed: 42
+
+# Minimum sample size requirements for validation status
+validation_requirements:
+  min_total_samples: 100
+  min_samples_per_class:
+    POSITIVE: 30
+    NEGATIVE: 30
+    INCONCLUSIVE: 10
+  min_unique_devices: 3
+  min_unique_lighting_conditions: 2
+
+# Performance metrics thresholds for VALIDATED status
+performance_thresholds:
+  overall_accuracy: 0.85
+  per_class_precision:
+    POSITIVE: 0.80
+    NEGATIVE: 0.85
+    INCONCLUSIVE: 0.50
+  per_class_recall:
+    POSITIVE: 0.80
+    NEGATIVE: 0.85
+    INCONCLUSIVE: 0.50
+  per_class_f1:
+    POSITIVE: 0.80
+    NEGATIVE: 0.85
+    INCONCLUSIVE: 0.50
+  # Sensitivity/specificity for binary classification (POSITIVE vs NEGATIVE+INCONCLUSIVE)
+  sensitivity: 0.85  # True positive rate
+  specificity: 0.90  # True negative rate
+  
+# Confidence interval settings
+confidence_intervals:
+  method: wilson  # Wilson score interval
+  confidence_level: 0.95
+
+# Output report formats
+output:
+  formats: [json, csv, html]  # No markdown
+  output_dir: "./validation/reports"
+  include_failure_cases: true
+  max_failure_cases: 50
+
+# Pipeline configuration
+pipeline:
+  config_version: DEMO-CONFIG-v1
+  model_path: null  # Path to trained model artifact (if applicable)
+  model_hash: null  # SHA-256 hash of model file
+
+# Synthetic augmentation settings (for robustness testing, NOT counted in validation)
+augmentation:
+  enabled: false  # Set true for robustness eval only
+  output_dir: "./validation/augmented"
+  perturbations:
+    brightness: [-20, -10, 0, 10, 20]
+    white_balance: [0.8, 0.9, 1.0, 1.1, 1.2]
+    blur_kernel: [3, 5, 7]
+  clearly_labeled_as_synthetic: true

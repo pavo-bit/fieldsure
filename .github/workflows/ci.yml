@@ -1,0 +1,326 @@
+name: CI Pipeline
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main, develop]
+
+env:
+  NODE_VERSION: '22.x'
+  PYTHON_VERSION: '3.12'
+
+jobs:
+  # =================================================
+  # API Backend Tests
+  # =================================================
+  api-lint-test:
+    name: API - Lint & Test
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: fieldsure_test
+          POSTGRES_PASSWORD: test_password
+          POSTGRES_DB: fieldsure_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+          cache-dependency-path: apps/api/package-lock.json
+
+      - name: Install dependencies
+        working-directory: apps/api
+        run: npm ci
+
+      - name: Lint
+        working-directory: apps/api
+        run: npm run lint
+
+      - name: Type check
+        working-directory: apps/api
+        run: npm run build
+
+      - name: Run Prisma migrations
+        working-directory: apps/api
+        env:
+          DATABASE_URL: postgresql://fieldsure_test:test_password@localhost:5432/fieldsure_test
+        run: npx prisma migrate deploy
+
+      - name: Unit tests
+        working-directory: apps/api
+        env:
+          DATABASE_URL: postgresql://fieldsure_test:test_password@localhost:5432/fieldsure_test
+          JWT_ACCESS_SECRET: test_jwt_secret
+          JWT_REFRESH_SECRET: test_jwt_refresh_secret
+        run: npm test -- --passWithNoTests
+
+      - name: Upload coverage
+        if: always()
+        uses: codecov/codecov-action@v5
+        with:
+          files: ./apps/api/coverage/coverage-final.json
+          flags: api
+
+  # =================================================
+  # ML Service Tests
+  # =================================================
+  ml-lint-test:
+    name: ML - Lint & Test
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: 'pip'
+          cache-dependency-path: apps/ml-service/requirements.txt
+
+      - name: Install dependencies
+        working-directory: apps/ml-service
+        run: |
+          pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Lint with ruff
+        working-directory: apps/ml-service
+        run: ruff check .
+
+      - name: Type check with mypy
+        working-directory: apps/ml-service
+        run: mypy app --ignore-missing-imports
+
+      - name: Run tests
+        working-directory: apps/ml-service
+        run: pytest tests/ --cov=app --cov-report=xml
+
+      - name: Upload coverage
+        if: always()
+        uses: codecov/codecov-action@v5
+        with:
+          files: ./apps/ml-service/coverage.xml
+          flags: ml
+
+  # =================================================
+  # Prisma Migration Check
+  # =================================================
+  migration-check:
+    name: Prisma Migration Check
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: fieldsure
+          POSTGRES_PASSWORD: test_password
+          POSTGRES_DB: fieldsure_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Install dependencies
+        working-directory: apps/api
+        run: npm ci
+
+      - name: Check migrations
+        working-directory: apps/api
+        env:
+          DATABASE_URL: postgresql://fieldsure:test_password@localhost:5432/fieldsure_test
+        run: |
+          npx prisma migrate deploy
+          npx prisma generate
+
+  # =================================================
+  # OpenAPI Diff Check
+  # =================================================
+  openapi-check:
+    name: OpenAPI Breaking Change Check
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Install dependencies
+        working-directory: apps/api
+        run: npm ci
+
+      - name: Generate current OpenAPI spec
+        working-directory: apps/api
+        run: |
+          npm run build
+          # Export OpenAPI spec (requires endpoint or script)
+          # node scripts/export-openapi.js > openapi-current.json
+
+      - name: Check for breaking changes
+        run: echo "OpenAPI diff check placeholder - implement with oasdiff or similar"
+
+  # =================================================
+  # Security Checks
+  # =================================================
+  security:
+    name: Security Audit
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: NPM Audit (API)
+        working-directory: apps/api
+        run: npm audit --production --audit-level=high
+        continue-on-error: true
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install pip-audit
+        run: pip install pip-audit
+
+      - name: pip-audit (ML Service)
+        working-directory: apps/ml-service
+        run: pip-audit -r requirements.txt
+        continue-on-error: true
+
+      - name: Secret Scanning with Gitleaks
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # =================================================
+  # CodeQL SAST
+  # =================================================
+  codeql:
+    name: CodeQL Analysis
+    runs-on: ubuntu-latest
+    permissions:
+      security-events: write
+      actions: read
+      contents: read
+
+    strategy:
+      matrix:
+        language: ['javascript', 'python']
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v3
+        with:
+          languages: ${{ matrix.language }}
+
+      - name: Autobuild
+        uses: github/codeql-action/autobuild@v3
+
+      - name: Perform CodeQL Analysis
+        uses: github/codeql-action/analyze@v3
+
+  # =================================================
+  # Container Build
+  # =================================================
+  build-containers:
+    name: Build Docker Images
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main'
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build API image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: infrastructure/docker/Dockerfile.api
+          push: false
+          tags: fieldsure-api:${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Build ML image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: infrastructure/docker/Dockerfile.ml
+          push: false
+          tags: fieldsure-ml:${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  # =================================================
+  # E2E Tests
+  # =================================================
+  e2e-tests:
+    name: End-to-End Tests
+    runs-on: ubuntu-latest
+    needs: [api-lint-test, ml-lint-test]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Start services with docker-compose
+        run: |
+          cp .env.example .env
+          docker compose --profile full up -d
+          sleep 30
+
+      - name: Wait for services
+        run: |
+          timeout 60 bash -c 'until curl -f http://localhost:3000/health; do sleep 2; done'
+          timeout 60 bash -c 'until curl -f http://localhost:8000/health; do sleep 2; done'
+
+      - name: Run E2E tests
+        run: |
+          echo "E2E test placeholder - implement with Newman, Playwright, or similar"
+          curl -f http://localhost:3000/health
+          curl -f http://localhost:8000/health
+
+      - name: Cleanup
+        if: always()
+        run: docker compose down -v

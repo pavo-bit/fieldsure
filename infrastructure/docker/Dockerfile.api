@@ -1,0 +1,57 @@
+# FieldSure API - Production Dockerfile
+# Multi-stage build with non-root user, pinned versions
+
+# ==============================================================================
+# Stage 1: Builder
+# ==============================================================================
+FROM node:22.13.1-alpine AS builder
+
+WORKDIR /build
+
+# Copy package files
+COPY apps/api/package*.json ./
+COPY apps/api/prisma ./prisma
+
+# Install dependencies
+RUN npm ci --only=production && \
+    npx prisma generate
+
+# Copy source code
+COPY apps/api .
+
+# Build TypeScript
+RUN npm run build
+
+# ==============================================================================
+# Stage 2: Runtime
+# ==============================================================================
+FROM node:22.13.1-alpine
+
+# Security: Create non-root user
+RUN addgroup -g 1000 apiservice && \
+    adduser -D -u 1000 -G apiservice apiservice && \
+    mkdir -p /app && \
+    chown -R apiservice:apiservice /app
+
+WORKDIR /app
+
+# Install production dependencies only
+COPY --from=builder --chown=apiservice:apiservice /build/package*.json ./
+COPY --from=builder --chown=apiservice:apiservice /build/node_modules ./node_modules
+COPY --from=builder --chown=apiservice:apiservice /build/dist ./dist
+COPY --from=builder --chown=apiservice:apiservice /build/prisma ./prisma
+
+# Switch to non-root user
+USER apiservice
+
+ENV NODE_ENV=production
+
+# Expose port
+EXPOSE 3000
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
+    CMD wget --no-verbose --tries=1 --spider http://localhost:3000/health || exit 1
+
+# Run migrations and start server
+CMD ["sh", "-c", "npx prisma migrate deploy && node dist/main.js"]

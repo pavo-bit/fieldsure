@@ -1,0 +1,61 @@
+{
+  "@@locale": "bn",
+  "appName": "ফিল্ডশিওর",
+  "appTagline": "ফিল্ড ড্রাগ টেস্টিংয়ের জন্য ডিজিটাল সহায়ক",
+  
+  "commonCancel": "বাতিল",
+  "commonConfirm": "নিশ্চিত করুন",
+  "commonRetry": "পুনরায় চেষ্টা করুন",
+  "commonContinue": "চালিয়ে যান",
+  "commonSave": "সংরক্ষণ করুন",
+  "commonDelete": "মুছুন",
+  
+  "authLogin": "লগইন",
+  "authLogout": "লগআউট",
+  "authEmail": "ইমেইল",
+  "authPassword": "পাসওয়ার্ড",
+  
+  "captureTitle": "পরীক্ষা ছবি ক্যাপচার করুন",
+  "captureInstructions": "ফ্রেমের মধ্যে টেস্ট কিট রাখুন",
+  "captureButton": "ক্যাপচার করুন",
+  "captureRetake": "আবার নিন",
+  
+  "qualityCheckBlur": "ছবি খুব ঝাপসা",
+  "qualityCheckBlurGuidance": "ডিভাইস স্থির রাখুন এবং আবার চেষ্টা করুন",
+  "qualityCheckUnderexposed": "ছবিতে কম আলো",
+  "qualityCheckUnderexposedGuidance": "ভাল আলোতে যান অথবা ফ্ল্যাশ ব্যবহার করুন",
+  "qualityCheckOverexposed": "ছবিতে অতিরিক্ত আলো",
+  "qualityCheckOverexposedGuidance": "ছায়ায় যান বা আলো কমান",
+  "qualityCheckGlare": "চকচকে শনাক্ত হয়েছে",
+  "qualityCheckGlareGuidance": "প্রতিফলন এড়াতে ছায়ায় যান",
+  "qualityCheckPoorContrast": "দুর্বল বৈসাদৃশ্য",
+  "qualityCheckPoorContrastGuidance": "ভাল বৈসাদৃশ্যের জন্য আলো সামঞ্জস্য করুন",
+  
+  "resultPresumptiveLabel": "অনুমানমূলক ফলাফল",
+  "resultDisclaimer": "শুধুমাত্র অনুমানমূলক ফলাফল। সমস্ত কলরমেট্রিক ফিল্ড টেস্ট ফলাফল অনুমানমূলক এবং আইনি কার্যধারায় ব্যবহারের আগে অবশ্যই ল্যাবরেটরি বিশ্লেষণ (GCMS, FTIR, বা সমতুল্য) দ্বারা নিশ্চিত করা উচিত।",
+  "resultPendingAnalysis": "সার্ভার বিশ্লেষণ মুলতুবি",
+  "resultConfidence": "আত্মবিশ্বাস",
+  "resultCandidateClasses": "প্রার্থী শ্রেণী",
+  "resultQualityFlags": "গুণমান পতাকা",
+  "resultKitValidation": "কিট বৈধতা অবস্থা",
+  
+  "syncStatusSyncing": "সিঙ্ক হচ্ছে...",
+  "syncStatusSynced": "সিঙ্ক হয়েছে",
+  "syncStatusPending": "সিঙ্ক মুলতুবি",
+  "syncStatusConflict": "সিঙ্ক দ্বন্দ্ব",
+  "syncStatusError": "সিঙ্ক ত্রুটি",
+  
+  "conflictResolutionTitle": "সিঙ্ক দ্বন্দ্ব",
+  "conflictResolutionMessage": "এই পরীক্ষা সার্ভারে সংশোধন করা হয়েছে। সমাধান কিভাবে করবেন চয়ন করুন:",
+  "conflictKeepServer": "সার্ভার সংস্করণ রাখুন",
+  "conflictRetryLocal": "স্থানীয় পরিবর্তন পুনরায় চেষ্টা করুন",
+  "conflictDiscardLocal": "স্থানীয় পরিবর্তন বাতিল করুন",
+  
+  "errorNetwork": "নেটওয়ার্ক ত্রুটি। অনুগ্রহ করে আপনার সংযোগ পরীক্ষা করুন।",
+  "errorUnauthorized": "সেশন মেয়াদ শেষ। অনুগ্রহ করে আবার লগইন করুন।",
+  "errorForbidden": "এই ক্রিয়ার জন্য আপনার অনুমতি নেই।",
+  "errorNotFound": "সম্পদ পাওয়া যায়নি।",
+  "errorConflict": "একটি দ্বন্দ্ব ঘটেছে। অনুগ্রহ করে রিফ্রেশ করুন এবং আবার চেষ্টা করুন।",
+  "errorServer": "সার্ভার ত্রুটি। অনুগ্রহ করে পরে আবার চেষ্টা করুন।",
+  "errorUnknown": "একটি অপ্রত্যাশিত ত্রুটি ঘটেছে।"
+}
