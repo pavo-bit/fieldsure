@@ -74,7 +74,9 @@ See [docs/implementation_plan.md](docs/implementation_plan.md) for the phased im
 
 ## License
 
-TBD
+Licensed under the Apache License, Version 2.0. See [LICENSE](LICENSE) for details.
+
+Copyright 2026 Mayuresh Mohanty and Srikant Ku. Mishra.
 
 ## Documentation
 
